@@ -52,14 +52,21 @@ export class SRC {
   }
 
   /**
-   * Resample one interleaved chunk (streaming `src_process`).
+   * Feed one interleaved chunk through the converter (streaming `src_process`).
+   *
+   * Call repeatedly with successive chunks of a stream; the converter keeps its
+   * internal filter state between calls, so the produced frame count per call is
+   * approximate (it lags input by the filter delay and catches up over time).
+   * When the stream ends, call {@link flush} to drain the buffered tail.
    *
    * @param dataIn interleaved float32 input, length = frames * nChannels
-   * @param dataOut optional reusable output buffer; must hold ceil(ratio * frames) * nChannels
+   * @param dataOut optional reusable output buffer; must hold ceil(ratio * frames) * nChannels + nChannels
    * @param outLength optional object that receives the produced frame count (per channel)
-   * @returns the resampled interleaved float32 (dataOut if supplied, else a fresh array)
+   * @returns the resampled interleaved float32. When `dataOut` is supplied it is
+   *   returned as-is (full length); read `outLength.frames` for the valid range.
+   *   When omitted, a fresh array sized to exactly the produced frames is returned.
    */
-  full(
+  process(
     dataIn: Float32Array,
     dataOut: Float32Array | null = null,
     outLength: { frames: number } | null = null,
@@ -88,24 +95,7 @@ export class SRC {
     // Copy input into the heap (re-read HEAPF32 after any malloc-induced growth).
     this.module.HEAPF32.set(dataIn, this.inPtr >> 2);
 
-    const err = this.module._resampler_process(
-      this.statePtr,
-      this.inPtr,
-      inFrames,
-      this.outPtr,
-      outFrames,
-      this.ratio,
-      0,
-      this.inUsedPtr,
-      this.outGenPtr,
-    );
-
-    if (err !== 0) {
-      const msg = this.module.UTF8ToString(this.module._resampler_strerror(err));
-      throw new Error(`libsamplerate src_process failed: ${msg}`);
-    }
-
-    const genFrames = this.module.HEAP32[this.outGenPtr >> 2];
+    const genFrames = this.runProcess(this.inPtr, inFrames, outFrames, false);
     if (outLength) outLength.frames = genFrames;
 
     const genFloats = genFrames * channels;
@@ -113,6 +103,76 @@ export class SRC {
     const result = dataOut ?? new Float32Array(genFloats);
     result.set(this.module.HEAPF32.subarray(start, start + genFloats));
     return result;
+  }
+
+  /**
+   * Signal end-of-input and drain every frame still held in the converter's
+   * filter. Call once after the last {@link process} of a stream; the tail is a
+   * few frames the SINC converters hold back due to their filter delay.
+   *
+   * Internally loops until the converter is empty and returns all remaining
+   * output as a single fresh interleaved float32 array (empty when there is
+   * nothing buffered, e.g. passthrough or already drained). The instance stays
+   * usable — call {@link reset} before reusing it for a new stream.
+   */
+  flush(): Float32Array {
+    if (this.destroyed) throw new Error('SRC instance already destroyed');
+    if (this._inputSampleRate === this._outputSampleRate) return new Float32Array(0);
+
+    const channels = this._nChannels;
+    const drainFrames = 4096;
+    this.ensureOut(drainFrames * channels * 4);
+    // libsamplerate needs a non-NULL data_in pointer even with zero input
+    // frames, otherwise the end-of-input drain stops short.
+    this.ensureIn(channels * 4);
+
+    const chunks: Float32Array[] = [];
+    let totalFloats = 0;
+    for (;;) {
+      const genFrames = this.runProcess(this.inPtr, 0, drainFrames, true);
+      if (genFrames <= 0) break;
+      const genFloats = genFrames * channels;
+      const start = this.outPtr >> 2;
+      const chunk = new Float32Array(genFloats);
+      chunk.set(this.module.HEAPF32.subarray(start, start + genFloats));
+      chunks.push(chunk);
+      totalFloats += genFloats;
+    }
+
+    if (chunks.length === 0) return new Float32Array(0);
+    if (chunks.length === 1) return chunks[0]!;
+    const out = new Float32Array(totalFloats);
+    let off = 0;
+    for (const c of chunks) {
+      out.set(c, off);
+      off += c.length;
+    }
+    return out;
+  }
+
+  /** Run one `src_process` call; returns produced frames per channel. */
+  private runProcess(
+    inPtr: number,
+    inFrames: number,
+    outFrames: number,
+    endOfInput: boolean,
+  ): number {
+    const err = this.module._resampler_process(
+      this.statePtr,
+      inPtr,
+      inFrames,
+      this.outPtr,
+      outFrames,
+      this.ratio,
+      endOfInput ? 1 : 0,
+      this.inUsedPtr,
+      this.outGenPtr,
+    );
+    if (err !== 0) {
+      const msg = this.module.UTF8ToString(this.module._resampler_strerror(err));
+      throw new Error(`libsamplerate src_process failed: ${msg}`);
+    }
+    return this.module.HEAP32[this.outGenPtr >> 2]!;
   }
 
   /** Reset the internal filter state (e.g. on a stream discontinuity). */
