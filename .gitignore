@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tgz
+.DS_Store
+
+# WASM build artifacts (keep source, ignore compiled + cloned upstream)
+wasm/out/
+wasm/libsamplerate/
+
+# Emscripten cache
+.em_cache/

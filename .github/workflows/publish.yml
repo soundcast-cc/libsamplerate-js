@@ -1,0 +1,109 @@
+name: Publish to npm
+
+# Triggered when a tag like v0.1.0, v1.2.3, v1.0.0-rc.1 is pushed.
+# Workflow:
+#   1. Build the libsamplerate WASM (needs Emscripten + cmake).
+#   2. Build the TS bundles (rollup copies wasm/out -> dist/wasm).
+#   3. Publish to npm with provenance (only works on public repos; harmless on private).
+#
+# Authentication:
+#   Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN secret required.
+#   Pre-requisite (one-time): on npmjs.com, open the package's
+#     "Settings -> Trusted Publisher" and register this GitHub repo +
+#     workflow filename ("publish.yml").
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run npm publish --dry-run instead of publishing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # required for Trusted Publishing (OIDC) and --provenance
+
+jobs:
+  publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@axonkit'
+
+      - name: Upgrade npm (Trusted Publishing requires >= 11.5.1)
+        run: npm install -g npm@latest
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+        if: github.event_name == 'push'
+
+      - name: Install cmake (for libsamplerate WASM build)
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+
+      - name: Cache libsamplerate source clone
+        uses: actions/cache@v4
+        with:
+          path: wasm/libsamplerate
+          key: libsamplerate-${{ runner.os }}-v1
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build WASM
+        run: npm run build:wasm
+
+      - name: Build TypeScript bundles
+        run: npm run build:ts
+
+      - name: Sanity-check dist contents
+        run: |
+          test -f dist/index.mjs
+          test -f dist/index.cjs
+          test -f dist/index.d.ts
+          test -f dist/wasm/libsamplerate.wasm
+          test -f dist/wasm/libsamplerate.js
+          echo "--- dist tree ---"
+          ls -lh dist dist/wasm
+
+      - name: Show tarball preview
+        run: npm pack --dry-run
+
+      - name: Publish (dry-run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: npm publish --access public --provenance --dry-run
+
+      - name: Publish to npm (Trusted Publishing / OIDC)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        run: npm publish --access public --provenance
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
