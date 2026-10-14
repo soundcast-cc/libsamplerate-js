@@ -1,4 +1,11 @@
-# @axonkit/libsamplerate-js
+# @soundcast-cc/libsamplerate-js
+
+A fork of [@axonkit/libsamplerate-js](https://github.com/axonkit/libsamplerate-js) that builds
+libsamplerate without its best and medium sinc converters
+(`LIBSAMPLERATE_ENABLE_SINC_BEST_CONVERTER=OFF`, `LIBSAMPLERATE_ENABLE_SINC_MEDIUM_CONVERTER=OFF`).
+Their coefficient tables were about 98% of the `.wasm`. `SRC_SINC_FASTEST`, `SRC_ZERO_ORDER_HOLD`
+and `SRC_LINEAR` produce the same output as upstream 0.1.0; requesting `SRC_SINC_BEST_QUALITY` or
+`SRC_SINC_MEDIUM_QUALITY` fails in `create()` with libsamplerate's "bad converter" error.
 
 Audio sample-rate conversion for the browser, backed by a WebAssembly build of
 [libsamplerate](https://github.com/libsndfile/libsamplerate).
@@ -10,13 +17,13 @@ into JS. The `.wasm` is fetched on demand, so it never bloats your main bundle.
 ## Install
 
 ```bash
-npm install @axonkit/libsamplerate-js
+npm install @soundcast-cc/libsamplerate-js
 ```
 
 ## Usage
 
 ```typescript
-import { create, ConverterType } from '@axonkit/libsamplerate-js';
+import { create, ConverterType } from '@soundcast-cc/libsamplerate-js';
 
 // 2 channels, 44100 Hz -> 48000 Hz
 const src = await create(2, 44100, 48000, {
@@ -42,7 +49,7 @@ Save as `demo.mjs` and run `node demo.mjs` — the WASM works in Node, browsers 
 workers alike:
 
 ```javascript
-import { create, ConverterType } from '@axonkit/libsamplerate-js';
+import { create, ConverterType } from '@soundcast-cc/libsamplerate-js';
 
 const inRate = 44100;
 const outRate = 48000;
@@ -137,15 +144,15 @@ See [libsamplerate converter docs](http://libsndfile.github.io/libsamplerate/api
 
 ### Package exports
 
-Main entry (`@axonkit/libsamplerate-js`):
+Main entry (`@soundcast-cc/libsamplerate-js`):
 
 - `create`, `SRC`, `ConverterType`
 - Types: `CreateOptions`, `ConverterTypeValue`
 
 Subpaths:
 
-- `@axonkit/libsamplerate-js/wasm-runtime` — glue URL overrides (see below)
-- `@axonkit/libsamplerate-js/wasm/*` — shipped `.js` / `.wasm` assets
+- `@soundcast-cc/libsamplerate-js/wasm-runtime` — glue URL overrides (see below)
+- `@soundcast-cc/libsamplerate-js/wasm/*` — shipped `.js` / `.wasm` assets
 
 ### WASM asset URL overrides (optional)
 
@@ -153,7 +160,7 @@ Not re-exported from the main entry. Use the subpath when you host the `.wasm` /
 glue yourself (CDN, static server, bundler `?url` imports):
 
 ```typescript
-import { setWasmUrl, setWasmGlueUrl } from '@axonkit/libsamplerate-js/wasm-runtime';
+import { setWasmUrl, setWasmGlueUrl } from '@soundcast-cc/libsamplerate-js/wasm-runtime';
 
 setWasmGlueUrl('/static/wasm/libsamplerate.js');
 setWasmUrl('/static/wasm/libsamplerate.wasm');

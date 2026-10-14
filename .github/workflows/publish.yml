@@ -1,30 +1,16 @@
-name: Publish to npm
+name: Publish to GitHub Packages
 
-# Triggered when a tag like v0.1.0, v1.2.3, v1.0.0-rc.1 is pushed.
-# Workflow:
-#   1. Build the libsamplerate WASM (needs Emscripten + cmake).
-#   2. Build the TS bundles (rollup copies wasm/out -> dist/wasm).
-#   3. Publish to npm with provenance (only works on public repos; harmless on private).
-#
-# Authentication:
-#   Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN secret required.
-#   Pre-requisite (one-time): on npmjs.com, open the package's
-#     "Settings -> Trusted Publisher" and register this GitHub repo +
-#     workflow filename ("publish.yml").
+# Triggered when a tag like v0.2.0 is pushed. Builds the WASM with the pinned Emscripten,
+# proves parity with upstream 0.1.0, and publishes @soundcast-cc/libsamplerate-js to
+# GitHub Packages with the workflow's own token.
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Run npm publish --dry-run instead of publishing'
-        type: boolean
-        default: false
 
 permissions:
-  contents: read
-  id-token: write # required for Trusted Publishing (OIDC) and --provenance
+  contents: write
+  packages: write
 
 jobs:
   publish:
@@ -40,11 +26,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-          scope: '@axonkit'
-
-      - name: Upgrade npm (Trusted Publishing requires >= 11.5.1)
-        run: npm install -g npm@latest
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@soundcast-cc'
 
       - name: Verify tag matches package.json version
         run: |
@@ -54,7 +37,6 @@ jobs:
             echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
             exit 1
           fi
-        if: github.event_name == 'push'
 
       - name: Install cmake (for libsamplerate WASM build)
         run: sudo apt-get update && sudo apt-get install -y cmake
@@ -62,14 +44,8 @@ jobs:
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: latest
+          version: 6.0.12
           actions-cache-folder: emsdk-cache
-
-      - name: Cache libsamplerate source clone
-        uses: actions/cache@v4
-        with:
-          path: wasm/libsamplerate
-          key: libsamplerate-${{ runner.os }}-v1
 
       - name: Install npm dependencies
         run: npm ci
@@ -80,29 +56,24 @@ jobs:
       - name: Build TypeScript bundles
         run: npm run build:ts
 
+      - name: Parity with upstream 0.1.0
+        run: npm run parity
+
       - name: Sanity-check dist contents
         run: |
           test -f dist/index.mjs
           test -f dist/index.cjs
           test -f dist/index.d.ts
-          test -f dist/wasm/libsamplerate.wasm
           test -f dist/wasm/libsamplerate.js
-          echo "--- dist tree ---"
+          test "$(wc -c < dist/wasm/libsamplerate.wasm)" -lt 65536
           ls -lh dist dist/wasm
 
-      - name: Show tarball preview
-        run: npm pack --dry-run
-
-      - name: Publish (dry-run)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        run: npm publish --access public --provenance --dry-run
-
-      - name: Publish to npm (Trusted Publishing / OIDC)
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        run: npm publish --access public --provenance
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish
 
       - name: Create GitHub Release
-        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}

@@ -13,10 +13,14 @@ if ! command -v emcc &>/dev/null; then
   exit 1
 fi
 
-# --- Clone libsamplerate if not present ---
+# --- Fetch the pinned libsamplerate commit if not present ---
+# 2ccde95 is the upstream commit 0.1.0 was built from, so output is unchanged.
+LSR_COMMIT="2ccde9568cca73c7b32c97fefca2e418c16ae5e3"
 if [ ! -d "libsamplerate" ]; then
-  echo ">>> Cloning libsamplerate..."
-  git clone --depth 1 https://github.com/libsndfile/libsamplerate.git libsamplerate
+  echo ">>> Fetching libsamplerate ${LSR_COMMIT}..."
+  git init -q libsamplerate
+  git -C libsamplerate fetch -q --depth 1 https://github.com/libsndfile/libsamplerate.git "$LSR_COMMIT"
+  git -C libsamplerate checkout -q FETCH_HEAD
 fi
 
 export EM_CACHE="$(pwd)/../.em_cache"
