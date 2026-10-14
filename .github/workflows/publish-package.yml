@@ -1,0 +1,61 @@
+# Builds the fastest-only WASM, proves parity with upstream 0.1.0, and publishes the package
+# to GitHub Packages.
+# https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+
+name: Publish package
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update && sudo apt-get install -y cmake
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.12
+          actions-cache-folder: emsdk-cache
+      - run: npm ci
+      - run: npm run build:wasm
+      - run: npm run typecheck
+      - run: npm run build:ts
+      - run: npm run parity
+      - name: Bound the WASM size
+        run: test "$(wc -c < dist/wasm/libsamplerate.wasm)" -lt 65536
+      # The publish job ships these exact verified bytes.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: wasm/out
+          if-no-files-found: error
+
+  publish-gpr:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com/
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: wasm/out
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
